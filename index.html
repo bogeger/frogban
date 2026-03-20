@@ -42,6 +42,24 @@
       fill: none;
       stroke: none;
     }
+
+    .motion-permission {
+      position: fixed;
+      left: 50%;
+      bottom: 1.1rem;
+      transform: translateX(-50%);
+      z-index: 10;
+      border: 0;
+      border-radius: 999px;
+      padding: 0.7rem 1.1rem;
+      color: #f5f8ff;
+      background: rgba(10, 18, 48, 0.86);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+      font-size: 0.92rem;
+      line-height: 1.1;
+      cursor: pointer;
+      backdrop-filter: blur(4px);
+    }
   </style>
 </head>
 <body>
@@ -79,22 +97,25 @@
       <ellipse class="socket-rim" cx="71.3" cy="31.2" rx="6.95" ry="6.28" />
     </svg>
   </main>
+  <button id="motion-permission" class="motion-permission" type="button" hidden>
+    Enable gyroscope eye tracking
+  </button>
 
   <script>
     const svg = document.getElementById("frog-svg");
+    const motionPermissionButton = document.getElementById("motion-permission");
     const eyes = [
       { image: document.getElementById("left-eyeball"), cx: 33.5, cy: 31.2, maxTravel: 1.45, yBias: 0.88 },
       { image: document.getElementById("right-eyeball"), cx: 71.3, cy: 31.2, maxTravel: 1.45, yBias: 0.88 },
     ];
+    let motionActive = false;
+    let neutralBeta = null;
+    let neutralGamma = null;
 
-    function moveEyeballs(clientX, clientY) {
-      const rect = svg.getBoundingClientRect();
-      const pointerX = ((clientX - rect.left) / rect.width) * 100;
-      const pointerY = ((clientY - rect.top) / rect.height) * 100;
-
+    function moveByVector(horizontal, vertical) {
       eyes.forEach((eye) => {
-        const dx = pointerX - eye.cx;
-        const dy = (pointerY - eye.cy) * eye.yBias;
+        const dx = horizontal;
+        const dy = vertical * eye.yBias;
         const distance = Math.hypot(dx, dy) || 1;
         const clamped = Math.min(distance, eye.maxTravel);
         const tx = (dx / distance) * clamped;
@@ -104,23 +125,126 @@
       });
     }
 
+    function moveEyeballs(clientX, clientY) {
+      const rect = svg.getBoundingClientRect();
+      const pointerX = ((clientX - rect.left) / rect.width) * 100;
+      const pointerY = ((clientY - rect.top) / rect.height) * 100;
+      const avgCx = (eyes[0].cx + eyes[1].cx) / 2;
+      const avgCy = (eyes[0].cy + eyes[1].cy) / 2;
+      moveByVector(pointerX - avgCx, pointerY - avgCy);
+    }
+
     function resetEyeballs() {
       eyes.forEach((eye) => eye.image.removeAttribute("transform"));
     }
 
     window.addEventListener("mousemove", (event) => {
+      if (motionActive) {
+        return;
+      }
       moveEyeballs(event.clientX, event.clientY);
     });
 
     window.addEventListener("touchmove", (event) => {
+      if (motionActive) {
+        return;
+      }
       const touch = event.touches[0];
       if (touch) {
         moveEyeballs(touch.clientX, touch.clientY);
       }
     }, { passive: true });
+    function orientationToEyeVector(beta, gamma) {
+      const maxTilt = 30;
+      if (neutralBeta === null) {
+        neutralBeta = beta ?? 0;
+      }
+      if (neutralGamma === null) {
+        neutralGamma = gamma ?? 0;
+      }
+
+      const relativeBeta = (beta ?? 0) - neutralBeta;
+      const relativeGamma = (gamma ?? 0) - neutralGamma;
+      const orientationAngle = (window.screen.orientation && typeof window.screen.orientation.angle === "number")
+        ? window.screen.orientation.angle
+        : (typeof window.orientation === "number" ? window.orientation : 0);
+
+      let horizontal = relativeGamma;
+      let vertical = relativeBeta;
+
+      if (orientationAngle === 90) {
+        horizontal = relativeBeta;
+        vertical = -relativeGamma;
+      } else if (orientationAngle === -90 || orientationAngle === 270) {
+        horizontal = -relativeBeta;
+        vertical = relativeGamma;
+      } else if (orientationAngle === 180 || orientationAngle === -180) {
+        horizontal = -relativeGamma;
+        vertical = -relativeBeta;
+      }
+
+      horizontal = Math.max(-maxTilt, Math.min(maxTilt, horizontal));
+      vertical = Math.max(-maxTilt, Math.min(maxTilt, vertical));
+      const maxTravel = Math.min(...eyes.map((eye) => eye.maxTravel));
+      return {
+        x: (horizontal / maxTilt) * maxTravel,
+        y: (vertical / maxTilt) * maxTravel,
+      };
+    }
+
+    function handleDeviceOrientation(event) {
+      if (typeof event.beta !== "number" || typeof event.gamma !== "number") {
+        return;
+      }
+      const vector = orientationToEyeVector(event.beta, event.gamma);
+      moveByVector(vector.x, vector.y);
+    }
+
+    async function enableGyroscopeTracking() {
+      const hasDeviceOrientation = typeof window.DeviceOrientationEvent !== "undefined";
+      if (!hasDeviceOrientation) {
+        return;
+      }
+      if (motionActive) {
+        return;
+      }
+
+      const requiresPermission = typeof window.DeviceOrientationEvent.requestPermission === "function";
+      if (requiresPermission) {
+        try {
+          const permission = await window.DeviceOrientationEvent.requestPermission();
+          if (permission !== "granted") {
+            return;
+          }
+        } catch {
+          return;
+        }
+      }
+
+      motionActive = true;
+      neutralBeta = null;
+      neutralGamma = null;
+      window.addEventListener("deviceorientation", handleDeviceOrientation);
+      motionPermissionButton.hidden = true;
+    }
+
+    function initMotionControls() {
+      const hasDeviceOrientation = typeof window.DeviceOrientationEvent !== "undefined";
+      if (!hasDeviceOrientation) {
+        return;
+      }
+      const requiresPermission = typeof window.DeviceOrientationEvent.requestPermission === "function";
+      if (requiresPermission) {
+        motionPermissionButton.hidden = false;
+        motionPermissionButton.addEventListener("click", enableGyroscopeTracking);
+      } else {
+        enableGyroscopeTracking();
+      }
+    }
 
     window.addEventListener("mouseleave", resetEyeballs);
     window.addEventListener("blur", resetEyeballs);
+    initMotionControls();
   </script>
 </body>
 </html>
