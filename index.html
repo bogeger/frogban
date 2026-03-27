@@ -42,6 +42,24 @@
       fill: none;
       stroke: none;
     }
+
+    .motion-permission {
+      position: fixed;
+      left: 50%;
+      bottom: 1.1rem;
+      transform: translateX(-50%);
+      z-index: 10;
+      border: 0;
+      border-radius: 999px;
+      padding: 0.7rem 1.1rem;
+      color: #f5f8ff;
+      background: rgba(10, 18, 48, 0.86);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+      font-size: 0.92rem;
+      line-height: 1.1;
+      cursor: pointer;
+      backdrop-filter: blur(4px);
+    }
   </style>
 </head>
 <body>
@@ -79,13 +97,35 @@
       <ellipse class="socket-rim" cx="71.3" cy="31.2" rx="6.95" ry="6.28" />
     </svg>
   </main>
+  <button id="motion-permission" class="motion-permission" type="button" hidden>
+    Enable gyroscope eye tracking
+  </button>
 
   <script>
     const svg = document.getElementById("frog-svg");
+    const motionPermissionButton = document.getElementById("motion-permission");
     const eyes = [
       { image: document.getElementById("left-eyeball"), cx: 33.5, cy: 31.2, maxTravel: 1.45, yBias: 0.88 },
       { image: document.getElementById("right-eyeball"), cx: 71.3, cy: 31.2, maxTravel: 1.45, yBias: 0.88 },
     ];
+    let motionActive = false;
+    let motionListening = false;
+    let neutralBeta = null;
+    let neutralGamma = null;
+    const smoothedMotion = { x: 0, y: 0 };
+
+    function moveByVector(horizontal, vertical) {
+      eyes.forEach((eye) => {
+        const dx = horizontal;
+        const dy = vertical * eye.yBias;
+        const distance = Math.hypot(dx, dy) || 1;
+        const clamped = Math.min(distance, eye.maxTravel);
+        const tx = (dx / distance) * clamped;
+        const ty = (dy / distance) * clamped;
+
+        eye.image.setAttribute("transform", `translate(${tx} ${ty})`);
+      });
+    }
 
     function moveEyeballs(clientX, clientY) {
       const rect = svg.getBoundingClientRect();
@@ -109,18 +149,166 @@
     }
 
     window.addEventListener("mousemove", (event) => {
+      if (motionActive) {
+        return;
+      }
       moveEyeballs(event.clientX, event.clientY);
     });
 
     window.addEventListener("touchmove", (event) => {
+      if (motionActive) {
+        return;
+      }
       const touch = event.touches[0];
       if (touch) {
         moveEyeballs(touch.clientX, touch.clientY);
       }
     }, { passive: true });
 
+    function getOrientationAngle() {
+      if (window.screen.orientation && typeof window.screen.orientation.angle === "number") {
+        return window.screen.orientation.angle;
+      }
+      if (typeof window.orientation === "number") {
+        return window.orientation;
+      }
+      return 0;
+    }
+
+    function orientationToEyeVector(beta, gamma) {
+      const maxTilt = 30;
+      const deadzone = 1.6;
+      if (neutralBeta === null) {
+        neutralBeta = beta ?? 0;
+      }
+      if (neutralGamma === null) {
+        neutralGamma = gamma ?? 0;
+      }
+
+      const relativeBeta = (beta ?? 0) - neutralBeta;
+      const relativeGamma = (gamma ?? 0) - neutralGamma;
+      const normalizedAngle = (((Math.round(getOrientationAngle() / 90) * 90) % 360) + 360) % 360;
+
+      let horizontal = relativeGamma;
+      let vertical = relativeBeta;
+
+      if (normalizedAngle === 90) {
+        horizontal = relativeBeta;
+        vertical = -relativeGamma;
+      } else if (normalizedAngle === 270) {
+        horizontal = -relativeBeta;
+        vertical = relativeGamma;
+      } else if (normalizedAngle === 180) {
+        horizontal = -relativeGamma;
+        vertical = -relativeBeta;
+      }
+
+      horizontal = Math.max(-maxTilt, Math.min(maxTilt, horizontal));
+      vertical = Math.max(-maxTilt, Math.min(maxTilt, vertical));
+      if (Math.abs(horizontal) < deadzone) {
+        horizontal = 0;
+      }
+      if (Math.abs(vertical) < deadzone) {
+        vertical = 0;
+      }
+      const maxTravel = Math.min(...eyes.map((eye) => eye.maxTravel));
+      return {
+        x: (horizontal / maxTilt) * maxTravel,
+        y: (vertical / maxTilt) * maxTravel,
+      };
+    }
+
+    function handleDeviceOrientation(event) {
+      if (typeof event.beta !== "number" || typeof event.gamma !== "number") {
+        return;
+      }
+
+      motionActive = true;
+      const vector = orientationToEyeVector(event.beta, event.gamma);
+      smoothedMotion.x += (vector.x - smoothedMotion.x) * 0.24;
+      smoothedMotion.y += (vector.y - smoothedMotion.y) * 0.24;
+      moveByVector(smoothedMotion.x, smoothedMotion.y);
+    }
+
+    function resetMotionCalibration() {
+      neutralBeta = null;
+      neutralGamma = null;
+      smoothedMotion.x = 0;
+      smoothedMotion.y = 0;
+    }
+
+    async function requestMotionPermissionIfNeeded() {
+      const requesters = [];
+      [window.DeviceOrientationEvent, window.DeviceMotionEvent].forEach((eventType) => {
+        if (
+          eventType &&
+          typeof eventType.requestPermission === "function" &&
+          !requesters.includes(eventType)
+        ) {
+          requesters.push(eventType);
+        }
+      });
+
+      if (requesters.length === 0) {
+        return true;
+      }
+
+      try {
+        for (const eventType of requesters) {
+          const permission = await eventType.requestPermission();
+          if (permission !== "granted") {
+            return false;
+          }
+        }
+      } catch {
+        return false;
+      }
+
+      return true;
+    }
+
+    async function enableGyroscopeTracking() {
+      const hasDeviceOrientation = typeof window.DeviceOrientationEvent !== "undefined";
+      if (!hasDeviceOrientation || motionListening) {
+        return;
+      }
+
+      const permissionGranted = await requestMotionPermissionIfNeeded();
+      if (!permissionGranted) {
+        motionPermissionButton.hidden = false;
+        return;
+      }
+
+      motionListening = true;
+      motionActive = false;
+      resetMotionCalibration();
+      window.addEventListener("deviceorientation", handleDeviceOrientation, { passive: true });
+      motionPermissionButton.hidden = true;
+    }
+
+    function initMotionControls() {
+      const hasDeviceOrientation = typeof window.DeviceOrientationEvent !== "undefined";
+      if (!hasDeviceOrientation) {
+        return;
+      }
+
+      const requiresPermission =
+        typeof window.DeviceOrientationEvent.requestPermission === "function" ||
+        (typeof window.DeviceMotionEvent !== "undefined" &&
+          typeof window.DeviceMotionEvent.requestPermission === "function");
+
+      if (requiresPermission) {
+        motionPermissionButton.hidden = false;
+        motionPermissionButton.addEventListener("click", enableGyroscopeTracking);
+      } else {
+        enableGyroscopeTracking();
+      }
+    }
+
     window.addEventListener("mouseleave", resetEyeballs);
     window.addEventListener("blur", resetEyeballs);
+    window.addEventListener("orientationchange", resetMotionCalibration);
+    initMotionControls();
   </script>
 </body>
 </html>

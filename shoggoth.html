@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Low Polygon Shoggoth</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #1a1a1a;
+            font-family: Arial, sans-serif;
+        }
+        #canvas {
+            display: block;
+        }
+        #info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: #fff;
+            font-size: 14px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 10px;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div id="info">Low Polygon Shoggoth - Drag to rotate</div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        // Scene setup
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setClearColor(0x1a1a1a);
+        document.body.appendChild(renderer.domElement);
+
+        camera.position.z = 30;
+
+        // Create low polygon shoggoth body
+        function createShoggoth() {
+            const group = new THREE.Group();
+
+            // Main body - irregular blob shape
+            const bodyGeometry = new THREE.IcosahedronGeometry(10, 2);
+            
+            // Create random displacement for more organic look
+            const positionAttribute = bodyGeometry.getAttribute('position');
+            const positions = positionAttribute.array;
+            
+            for (let i = 0; i < positions.length; i += 3) {
+                const x = positions[i];
+                const y = positions[i + 1];
+                const z = positions[i + 2];
+                const length = Math.sqrt(x * x + y * y + z * z);
+                
+                const randomFactor = 0.8 + Math.random() * 0.4;
+                positions[i] = (x / length) * length * randomFactor;
+                positions[i + 1] = (y / length) * length * randomFactor;
+                positions[i + 2] = (z / length) * length * randomFactor;
+            }
+            positionAttribute.needsUpdate = true;
+            bodyGeometry.computeVertexNormals();
+
+            const bodyMaterial = new THREE.MeshPhongMaterial({
+                color: 0xffffff,
+                emissive: 0x404040,
+                shininess: 20,
+                flatShading: true
+            });
+            const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+            group.add(body);
+
+            // Add tentacles
+            for (let i = 0; i < 6; i++) {
+                const angle = (i / 6) * Math.PI * 2;
+                const x = Math.cos(angle) * 12;
+                const z = Math.sin(angle) * 12;
+                
+                const tentacle = createTentacle();
+                tentacle.position.set(x, -8, z);
+                tentacle.rotation.z = angle;
+                group.add(tentacle);
+            }
+
+            // Add eyes/mouths
+            for (let i = 0; i < 3; i++) {
+                const eyeGeometry = new THREE.OctahedronGeometry(1.5, 1);
+                const eyeMaterial = new THREE.MeshPhongMaterial({
+                    color: 0x000000,
+                    emissive: 0x000000,
+                    flatShading: true
+                });
+                const eye = new THREE.Mesh(eyeGeometry, eyeMaterial);
+                
+                const angle = (i / 3) * Math.PI * 2;
+                eye.position.set(
+                    Math.cos(angle) * 8,
+                    Math.sin(angle) * 5,
+                    10
+                );
+                group.add(eye);
+            }
+
+            return group;
+        }
+
+        function createTentacle() {
+            const tentacleGroup = new THREE.Group();
+            
+            for (let j = 0; j < 4; j++) {
+                const segmentGeometry = new THREE.OctahedronGeometry(1.2 - j * 0.2, 1);
+                const segmentMaterial = new THREE.MeshPhongMaterial({
+                    color: 0xe0e0e0,
+                    emissive: 0x202020,
+                    flatShading: true
+                });
+                const segment = new THREE.Mesh(segmentGeometry, segmentMaterial);
+                segment.position.y = -j * 3;
+                segment.scale.y = 1.5;
+                tentacleGroup.add(segment);
+            }
+            
+            return tentacleGroup;
+        }
+
+        const shoggoth = createShoggoth();
+        scene.add(shoggoth);
+
+        // Lighting
+        const light1 = new THREE.DirectionalLight(0xffffff, 0.8);
+        light1.position.set(10, 10, 10);
+        scene.add(light1);
+
+        const light2 = new THREE.DirectionalLight(0xffffff, 0.4);
+        light2.position.set(-10, -10, -10);
+        scene.add(light2);
+
+        const ambientLight = new THREE.AmbientLight(0x555555);
+        scene.add(ambientLight);
+
+        // Mouse controls
+        let isDragging = false;
+        let previousMousePosition = { x: 0, y: 0 };
+
+        document.addEventListener('mousedown', (e) => {
+            isDragging = true;
+            previousMousePosition = { x: e.clientX, y: e.clientY };
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (isDragging) {
+                const deltaX = e.clientX - previousMousePosition.x;
+                const deltaY = e.clientY - previousMousePosition.y;
+                
+                shoggoth.rotation.y += deltaX * 0.01;
+                shoggoth.rotation.x += deltaY * 0.01;
+                
+                previousMousePosition = { x: e.clientX, y: e.clientY };
+            }
+        });
+
+        document.addEventListener('mouseup', () => {
+            isDragging = false;
+        });
+
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // Animation loop
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // Gentle rotation when not dragging
+            if (!isDragging) {
+                shoggoth.rotation.y += 0.001;
+                shoggoth.rotation.x += 0.0005;
+            }
+
+            // Subtle pulsing animation
+            const scale = 1 + Math.sin(Date.now() * 0.001) * 0.05;
+            shoggoth.scale.set(scale, scale, scale);
+
+            renderer.render(scene, camera);
+        }
+
+        animate();
+    </script>
+</body>
+</html>
